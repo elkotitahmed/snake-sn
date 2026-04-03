@@ -13,7 +13,8 @@ export const getBotDecisions = async (
   playerPos: { x: number; y: number },
   bots: { id: string; x: number; y: number; angle: number; score: number }[],
   foods: { x: number; y: number; value: number }[],
-  worldSize: number
+  worldSize: number,
+  options?: { signal?: AbortSignal }  // ✅ دعم إلغاء الطلب
 ): Promise<Record<string, { angle: number; boost: boolean }>> => {
   // إذا لم يوجد مفتاح API، أرجع قرارات عشوائية (حتى لا تتعطل اللعبة)
   if (!ai) {
@@ -28,9 +29,14 @@ export const getBotDecisions = async (
     return randomDecisions;
   }
 
+  // إذا تم إلغاء الطلب مسبقاً، نخرج مباشرة
+  if (options?.signal?.aborted) {
+    throw new DOMException("Aborted", "AbortError");
+  }
+
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash", // استخدم نموذجاً مستقراً بدلاً من gemini-3-flash-preview
+      model: "gemini-2.0-flash", // نموذج مستقر وسريع
       contents: `
         You are controlling multiple bot snakes in a slither.io style game.
         World Size: ${worldSize}x${worldSize}
@@ -61,7 +67,8 @@ export const getBotDecisions = async (
               required: ["angle", "boost"]
             }
           }), {})
-        }
+        },
+        abortSignal: options?.signal  // ✅ تمرير إشارة الإلغاء إلى Gemini API
       }
     });
 
@@ -69,6 +76,10 @@ export const getBotDecisions = async (
     if (!text) return {};
     return JSON.parse(text);
   } catch (error) {
+    // إذا كان الخطأ بسبب الإلغاء، نعيد طرحه ليتعامل معه المتصل
+    if (error instanceof Error && error.name === "AbortError") {
+      throw error;
+    }
     console.error("Gemini AI Bot Decision Error:", error);
     return {};
   }
