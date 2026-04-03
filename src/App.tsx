@@ -128,43 +128,85 @@ export default function App() {
     setGameState('playing');
   };
 
-  // AI Bot Behavior
+  // AI Bot Behavior - نسخة محسنة للأداء
   useEffect(() => {
     if (gameState !== 'playing') return;
 
-    const aiInterval = setInterval(async () => {
+    let abortController = new AbortController();
+
+    const updateBotAI = async () => {
+      if (gameState !== 'playing') return;
+      
       const state = stateRef.current;
+      if (!state.player.segments.length || state.bots.length === 0) return;
+      
       const playerPos = state.player.segments[0];
-      // Only update a subset of bots to save tokens/latency
-      const botData = state.bots.slice(0, 5).map(b => ({
+      // إرسال 3 بوتات فقط (بدلاً من 5) لتقليل الحمل
+      const botData = state.bots.slice(0, 3).map(b => ({
         id: b.id,
         x: b.segments[0].x,
         y: b.segments[0].y,
         angle: b.angle,
         score: b.score
       }));
-      const foodData = state.foods.slice(0, 10).map(f => ({
+      // إرسال 5 حبات طعام فقط (بدلاً من 10)
+      const foodData = state.foods.slice(0, 5).map(f => ({
         x: f.x,
         y: f.y,
         value: f.value
       }));
 
-      const decisions = await getBotDecisions(playerPos, botData, foodData, WORLD_SIZE);
-      
-      // Apply decisions to stateRef
-      stateRef.current.bots = stateRef.current.bots.map(bot => {
-        if (decisions[bot.id]) {
-          return {
+      try {
+        const decisions = await getBotDecisions(
+          playerPos, 
+          botData, 
+          foodData, 
+          WORLD_SIZE,
+          { signal: abortController.signal }  // دعم إلغاء الطلب
+        );
+        
+        // تطبيق القرارات على البوتات
+        stateRef.current.bots = stateRef.current.bots.map(bot => {
+          if (decisions[bot.id]) {
+            return {
+              ...bot,
+              targetAngle: decisions[bot.id].angle,
+              isBoosting: decisions[bot.id].boost && bot.score > 20
+            };
+          }
+          return bot;
+        });
+        
+        // تحديث الحالة للـ UI بشكل غير متكرر (كل طلب AI فقط)
+        setBots([...stateRef.current.bots]);
+        
+      } catch (error) {
+        if (error instanceof Error && error.name !== 'AbortError') {
+          console.warn('AI update failed, using random movement for bots:', error);
+          // حركة عشوائية كـ fallback للبوتات التي فشلت
+          stateRef.current.bots = stateRef.current.bots.map(bot => ({
             ...bot,
-            targetAngle: decisions[bot.id].angle,
-            isBoosting: decisions[bot.id].boost
-          };
+            targetAngle: bot.targetAngle + (Math.random() - 0.5) * 0.5,
+            isBoosting: false
+          }));
+          setBots([...stateRef.current.bots]);
         }
-        return bot;
-      });
-    }, 3000);
+      }
+    };
 
-    return () => clearInterval(aiInterval);
+    // زيادة الفاصل الزمني إلى 10 ثوانٍ (كان 3 ثوانٍ)
+    const aiInterval = setInterval(() => {
+      updateBotAI().catch(err => {
+        if (err.name !== 'AbortError') {
+          console.error('AI interval error:', err);
+        }
+      });
+    }, 10000); // ← 10000 مللي ثانية = 10 ثوانٍ
+
+    return () => {
+      clearInterval(aiInterval);
+      abortController.abort();
+    };
   }, [gameState]);
 
   // Auth listener
